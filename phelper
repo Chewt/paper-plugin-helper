@@ -1,0 +1,130 @@
+#!/usr/bin/bash
+# A script to set up a papermc plugin using gradle
+# Author: Hayden Johnson
+
+# READ PROJECT DETAILS
+if [ -f "gradle.properties" ]
+then
+    MC_VERSION=$(cat gradle.properties | grep "mcver" | cut -d '=' -f2)
+    PROJECT=$(cat gradle.properties | grep "project" | cut -d '=' -f2)
+    PACKAGE=$(cat gradle.properties | grep "package" | cut -d '=' -f2)
+    VERSION=$(cat gradle.properties | grep "version" | cut -d '=' -f2)
+fi
+
+# COMMAND LINE ARGS
+
+if [ ! "$MC_VERSION" = "" ] && [ "$1" = "server" ] && [ "$2" = "download" ]
+then
+    mkdir -p server
+    CUR_DIR=$PWD
+    cd server
+    curl https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds --output versions.json
+    JARNAME=$(jq '.builds[-1].downloads.application.name' versions.json | tr -d '"')
+    BUILD=$(jq '.builds[-1].build' versions.json)
+    rm versions.json
+    curl "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${BUILD}/downloads/${JARNAME}" --output paper.jar
+    echo "eula=true" > eula.txt
+    cat > start.sh << EOF
+java -Xms2G -Xmx2G -jar paper.jar --nogui
+EOF
+    chmod +x start.sh
+elif [ "$1" = "server" ] && [ "$2" = "start" ]
+then
+    cd server
+    ./start.sh
+fi
+if [ "$1" = "cp" ]
+then
+    JAR="build/libs/${PROJECT}-${VERSION}.jar"
+    mkdir -p server/plugins
+    rm -f server/plugins/${PROJECT}-*.jar
+    cp $JAR server/plugins
+fi
+if [ ! $# -eq 0 ] 
+then
+    exit
+fi
+
+# MAIN
+
+echo -n "Minecraft version: "
+read MC_VERSION
+echo -n "Project name: "
+read PROJECT
+echo -n "Package name: "
+read PACKAGE
+echo -n "Project initial version: "
+read VERSION
+
+gradle init --type basic --dsl kotlin --project-name $PROJECT --no-incubating
+
+cat >> build.gradle.kts << EOF
+plugins {
+    java
+}
+
+group = "${PACKAGE}"
+val version: String by project
+val apiver: String by project
+
+repositories {
+    mavenCentral()
+    maven(url="https://repo.papermc.io/repository/maven-public/")
+}
+
+dependencies {
+    implementation("io.papermc.paper:paper-api:${MC_VERSION}-R0.1-SNAPSHOT")
+}
+
+java {
+    toolchain.languageVersion.set(JavaLanguageVersion.of(17))
+}
+
+tasks.processResources{
+    expand("version" to version, "apiver" to apiver)
+}
+EOF
+
+PACKAGE_DIRS=$(echo $PACKAGE | tr '.' '/')
+mkdir -p src/main/java/$PACKAGE_DIRS
+mkdir -p src/main/resources
+
+cat > src/main/resources/plugin.yml << EOF
+name: $PROJECT
+main: ${PACKAGE}.$PROJECT
+version: \${version}
+api-version: \${apiver}
+EOF
+
+cat > gradle.properties << EOF
+version=$VERSION
+project=$PROJECT
+package=$PACKAGE
+mcver=$MC_VERSION
+apiver=$(echo $MC_VERSION | sed -e "s/\.[^.]*$//")
+EOF
+
+cat > src/main/java/${PACKAGE_DIRS}/${PROJECT}.java << EOF
+package ${PACKAGE};
+
+import net.kyori.adventure.text.Component;
+import org.bukkit.Bukkit;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.plugin.java.JavaPlugin;
+
+public class ${PROJECT} extends JavaPlugin implements Listener {
+
+    @Override
+    public void onEnable() {
+        Bukkit.getPluginManager().registerEvents(this, this);
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        event.getPlayer().sendMessage(Component.text("Hello, " + event.getPlayer().getName() + "!"));
+    }
+
+}
+EOF
